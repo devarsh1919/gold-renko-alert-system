@@ -138,36 +138,45 @@ def calc_stochastic(closes, highs, lows, k_length=12, k_smooth=3, d_smooth=3):
     return k_smoothed, d_smoothed
 
 
-def calc_vwap(closes, highs, lows, volumes, session_start_idx: int):
+def calc_vwap(closes, highs, lows, volumes, session_start_idx: int, brick_size: float = 3.0):
     """
-    Session VWAP with Standard Deviation Bands (multiplier=1)
-    Resets at session_start_idx
+    Session VWAP with Standard Deviation Bands (multiplier=1).
+    Uses price-range based std dev since we don't have real volume.
+    Minimum band width = 2x brick_size to avoid false breakouts.
+    Resets at session_start_idx.
     """
     n = len(closes)
-    vwap_vals = [None] * n
+    vwap_vals  = [None] * n
     upper_band = [None] * n
     lower_band = [None] * n
 
     if session_start_idx >= n:
         return vwap_vals, upper_band, lower_band
 
-    cum_tp_vol = 0.0
-    cum_vol = 0.0
-    cum_tp2_vol = 0.0
+    # Use equal weighting (volume = 1) since we have no real volume
+    # Calculate running mean and std dev of typical price
+    tp_values = []
 
     for i in range(session_start_idx, n):
         tp = (highs[i] + lows[i] + closes[i]) / 3
-        vol = volumes[i] if volumes[i] else 1.0
-        cum_tp_vol += tp * vol
-        cum_vol += vol
-        cum_tp2_vol += tp * tp * vol
+        tp_values.append(tp)
 
-        vwap = cum_tp_vol / cum_vol
-        variance = (cum_tp2_vol / cum_vol) - (vwap ** 2)
-        std_dev = variance ** 0.5 if variance > 0 else 0
+        # Running VWAP = simple mean of typical prices (equal weight)
+        vwap = sum(tp_values) / len(tp_values)
 
-        vwap_vals[i] = vwap
-        upper_band[i] = vwap + std_dev        # multiplier=1
+        # Running std dev of typical prices
+        if len(tp_values) > 1:
+            variance = sum((t - vwap) ** 2 for t in tp_values) / len(tp_values)
+            std_dev  = variance ** 0.5
+        else:
+            std_dev = 0
+
+        # Minimum band = 2 brick sizes to prevent false breakouts on tight std dev
+        min_band = brick_size * 2
+        std_dev  = max(std_dev, min_band)
+
+        vwap_vals[i]  = vwap
+        upper_band[i] = vwap + std_dev
         lower_band[i] = vwap - std_dev
 
     return vwap_vals, upper_band, lower_band
