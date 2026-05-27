@@ -87,6 +87,74 @@ def get_daily_candles_history():
     return [], []
 
 
+def preload_historical_renko():
+    """
+    Fetch last 500 x 1-min candles on startup to pre-build Renko bricks.
+    This ensures 200 SMA (Strategy 2) and other indicators have enough data.
+    Uses ~2 REST API calls from free Twelve Data quota.
+    """
+    global price_volumes, last_session_date
+    logger.info("📥 Preloading historical 1-min data to warm up Renko engine...")
+
+    try:
+        # Fetch 500 x 1-min candles (covers ~8 hours)
+        url = (
+            f"https://api.twelvedata.com/time_series"
+            f"?symbol=XAU/USD&interval=1min&outputsize=500"
+            f"&apikey={TWELVE_DATA_KEY}"
+        )
+        resp = requests.get(url, timeout=20)
+        data = resp.json()
+
+        if "values" not in data:
+            logger.error(f"Historical data error: {data.get('message', 'unknown')}")
+            return
+
+        candles = list(reversed(data["values"]))  # oldest first
+        logger.info(f"✅ Fetched {len(candles)} historical 1-min candles")
+
+        today_utc = datetime.now(tz=timezone.utc).date()
+        session_started = False
+
+        for candle in candles:
+            ts    = datetime.fromisoformat(candle["datetime"]).replace(tzinfo=timezone.utc)
+            close = float(candle["close"])
+            high  = float(candle["high"])
+            low   = float(candle["low"])
+
+            # Track VWAP session reset at UTC midnight
+            if ts.date() == today_utc and not session_started:
+                s3.new_session(len(renko.bricks))
+                session_started = True
+                logger.info(f"✅ VWAP session reset at {ts} UTC (today)")
+
+            new_bricks = renko.process_price(close, ts)
+            for _ in new_bricks:
+                price_volumes.append(1.0)
+
+        brick_count = len(renko.bricks)
+        logger.info(f"✅ Renko preload complete — {brick_count} bricks built")
+
+        if brick_count < 200:
+            logger.warning(
+                f"⚠️ Only {brick_count} bricks after preload. "
+                f"Strategy 2 (200 SMA) needs 200. Will activate once enough bricks form."
+            )
+        else:
+            logger.info(f"✅ All strategies ready — enough bricks for 200 SMA")
+
+        telegram.send(
+            f"📊 *Renko Preload Complete*\n"
+            f"Historical bricks built: {brick_count}\n"
+            f"Strategy 2 (200 SMA): {'✅ Ready' if brick_count >= 200 else f'⏳ Need {200-brick_count} more bricks'}\n"
+            f"All systems monitoring live now!"
+        )
+
+    except Exception as e:
+        logger.error(f"Preload failed: {e}")
+        telegram.send(f"⚠️ Historical preload failed: {e}\nSystem running on live data only.")
+
+
 def check_new_session(timestamp: datetime):
     """Reset VWAP and update daily box at UTC midnight"""
     global last_session_date, daily_highs, daily_lows
@@ -228,13 +296,8 @@ def main():
         s4.update_daily_box(daily_highs, daily_lows)
         logger.info(f"✅ DBOX initialized — Top: {s4.top_box}, Bottom: {s4.bottom_box}")
 
-    # Initialize session tracker to TODAY so VWAP starts fresh
-    from datetime import datetime, timezone
-    now_utc = datetime.now(tz=timezone.utc)
-    global last_session_date
-    last_session_date = now_utc.date()
-    s3.new_session(0)  # VWAP starts from first brick received today
-    logger.info(f"✅ VWAP session anchored to today: {last_session_date} UTC")
+    # Preload historical data — this also handles VWAP session reset internally
+    preload_historical_renko()
 
     # Send startup notification
     telegram.send_startup(BRICK_SIZE)
