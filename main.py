@@ -228,6 +228,14 @@ def main():
         s4.update_daily_box(daily_highs, daily_lows)
         logger.info(f"✅ DBOX initialized — Top: {s4.top_box}, Bottom: {s4.bottom_box}")
 
+    # Initialize session tracker to TODAY so VWAP starts fresh
+    from datetime import datetime, timezone
+    now_utc = datetime.now(tz=timezone.utc)
+    global last_session_date
+    last_session_date = now_utc.date()
+    s3.new_session(0)  # VWAP starts from first brick received today
+    logger.info(f"✅ VWAP session anchored to today: {last_session_date} UTC")
+
     # Send startup notification
     telegram.send_startup(BRICK_SIZE)
 
