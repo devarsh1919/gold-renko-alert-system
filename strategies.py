@@ -85,17 +85,28 @@ class Strategy1_MAPullback:
                     else min(self.pullback_low, last.low)
             elif green and self.pull_count_up > 0:
                 # Reversal brick — check conditions
-                touched_sma = self.pullback_low is not None and self.pullback_low <= s8 * 1.002
-                valid_pull  = 1 <= self.pull_count_up <= self.max_pullback
+                # Strict SMA touch: pullback low must be within 1 brick size of 8 SMA
+                # i.e. price actually came close to/below 8 SMA during pullback
+                sma_touch_threshold = engine.brick_size * 1.5  # within 1.5 bricks of SMA
+                touched_sma = (
+                    self.pullback_low is not None and
+                    abs(self.pullback_low - s8) <= sma_touch_threshold
+                )
+                valid_pull = 1 <= self.pull_count_up <= self.max_pullback
+
+                # Save count BEFORE resetting for the alert message
+                saved_pull_count = self.pull_count_up
+                saved_pullback_low = self.pullback_low
+
+                # Reset state
+                self.pull_count_up = 0
+                self.pullback_low  = None
 
                 if valid_pull and touched_sma:
-                    sl = self.pullback_low
+                    sl    = saved_pullback_low
                     entry = price
                     risk  = entry - sl
                     tp    = entry + (2 * risk)
-
-                    self.pull_count_up = 0
-                    self.pullback_low  = None
 
                     return Signal(
                         strategy_num=1,
@@ -107,14 +118,11 @@ class Strategy1_MAPullback:
                         message=(
                             f"🟢 *GOLD BUY — Strategy 1 (MA Pullback)*\n"
                             f"Entry: ${entry:.3f}\n"
-                            f"Pullback Bricks: {self.pull_count_up}\n"
+                            f"Pullback Bricks: {saved_pull_count}\n"
                             f"8 SMA: ${s8:.3f} | 21 SMA: ${s21:.3f}\n"
                             f"SL: ${sl:.3f} | TP: ${tp:.3f} (1:2 RR)"
                         )
                     )
-                else:
-                    self.pull_count_up = 0
-                    self.pullback_low  = None
 
         # ── DOWNTREND PULLBACK TRACKING ──
         if downtrend:
@@ -123,17 +131,24 @@ class Strategy1_MAPullback:
                 self.pullback_high = last.high if self.pullback_high is None \
                     else max(self.pullback_high, last.high)
             elif red and self.pull_count_down > 0:
-                touched_sma = self.pullback_high is not None and self.pullback_high >= s8 * 0.998
-                valid_pull  = 1 <= self.pull_count_down <= self.max_pullback
+                sma_touch_threshold = engine.brick_size * 1.5
+                touched_sma = (
+                    self.pullback_high is not None and
+                    abs(self.pullback_high - s8) <= sma_touch_threshold
+                )
+                valid_pull = 1 <= self.pull_count_down <= self.max_pullback
+
+                saved_pull_count    = self.pull_count_down
+                saved_pullback_high = self.pullback_high
+
+                self.pull_count_down = 0
+                self.pullback_high   = None
 
                 if valid_pull and touched_sma:
-                    sl = self.pullback_high
+                    sl    = saved_pullback_high
                     entry = price
                     risk  = sl - entry
                     tp    = entry - (2 * risk)
-
-                    self.pull_count_down = 0
-                    self.pullback_high   = None
 
                     return Signal(
                         strategy_num=1,
@@ -145,14 +160,11 @@ class Strategy1_MAPullback:
                         message=(
                             f"🔴 *GOLD SELL — Strategy 1 (MA Pullback)*\n"
                             f"Entry: ${entry:.3f}\n"
-                            f"Pullback Bricks: {self.pull_count_down}\n"
+                            f"Pullback Bricks: {saved_pull_count}\n"
                             f"8 SMA: ${s8:.3f} | 21 SMA: ${s21:.3f}\n"
                             f"SL: ${sl:.3f} | TP: ${tp:.3f} (1:2 RR)"
                         )
                     )
-                else:
-                    self.pull_count_down = 0
-                    self.pullback_high   = None
 
         return None
 
@@ -320,7 +332,8 @@ class Strategy3_VWAPBreakout:
         lows   = engine.get_lows()
 
         vwap, upper, lower = calc_vwap(
-            closes, highs, lows, volumes, self.session_start_idx
+            closes, highs, lows, volumes, self.session_start_idx,
+            brick_size=engine.brick_size
         )
         sma8 = calc_sma(closes, 8)
 
